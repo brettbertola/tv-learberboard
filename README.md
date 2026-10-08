@@ -8,6 +8,8 @@ An over-the-top, Rive-powered party scoreboard with a host control surface and a
 - Adds and removes teams and uses competition ranking for ties.
 - Opens a dedicated `/tv` display and synchronizes updates between windows with `BroadcastChannel`.
 - Persists the current party locally so a refresh does not erase the board.
+- Presents every team in one centered ranked list rather than splitting the standings into columns.
+- Runs a coordinated three-second update sequence: score count-up, progress fill, physical rank movement, coin storm, energy waves, and particle bursts.
 - Drives Rive view-model values for the title, leader, score, round, animation energy, and coin-storm intensity.
 - Includes animated auroras, rotating energy portals, a leader beacon, twinkling stars, score impacts, and coin rain.
 - Honors the operating system's reduced-motion preference.

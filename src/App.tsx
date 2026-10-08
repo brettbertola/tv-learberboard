@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import './App.css'
 import { RiveStage } from './RiveStage'
 import { applyScoreUpdate, CHANNEL_NAME, createDefaultState, loadState, nextTeamName, rankTeams, STORAGE_KEY, type ScoreboardState, type Team } from './scoreboard'
@@ -32,24 +32,107 @@ function useLiveScoreboard(): [ScoreboardState, Commit] {
   return [state, commit]
 }
 
+const UPDATE_DURATION = 3000
+
+function useAnimatedScore(target: number, celebrationId: number) {
+  const [displayed, setDisplayed] = useState(target)
+  const currentRef = useRef(target)
+
+  useEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || celebrationId === 0) {
+      currentRef.current = target
+      // This synchronizes the rendered counter with an externally supplied score.
+      // oxlint-disable-next-line react/set-state-in-effect
+      setDisplayed(target)
+      return
+    }
+    const from = currentRef.current
+    const startedAt = performance.now()
+    let frame = 0
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / UPDATE_DURATION)
+      const next = Math.round(from + (target - from) * progress)
+      currentRef.current = next
+      setDisplayed(next)
+      if (progress < 1) frame = requestAnimationFrame(tick)
+    }
+    frame = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(frame)
+  }, [target, celebrationId])
+
+  return displayed
+}
+
+function AnimatedScoreRow({ team, maxScore, celebrationId, rowRef }: {
+  team: ReturnType<typeof rankTeams>[number]
+  maxScore: number
+  celebrationId: number
+  rowRef: (element: HTMLElement | null) => void
+}) {
+  const displayedScore = useAnimatedScore(team.coins, celebrationId)
+  const fill = maxScore > 0 ? Math.max(0, Math.min(100, (displayedScore / maxScore) * 100)) : 0
+  return (
+    <article ref={rowRef} data-team-id={team.id} className={`score-row rank-${team.rank} ${team.rank === 1 ? 'is-leader' : ''}`}>
+      <span className="score-fill" style={{ width: `${fill}%` }} />
+      <span className="rank-badge">{team.rank}<small>{team.rank === 1 ? 'ST' : team.rank === 2 ? 'ND' : team.rank === 3 ? 'RD' : 'TH'}</small></span>
+      <span className="score-name">{team.name}</span>
+      <span className="coin-mark" aria-hidden="true">★</span>
+      <strong>{displayedScore.toLocaleString()}</strong>
+    </article>
+  )
+}
+
 function TVBoard({ state, preview = false }: { state: ScoreboardState; preview?: boolean }) {
   const ranked = useMemo(() => rankTeams(state.teams), [state.teams])
   const leader = ranked[0]
-  const isCelebrating = state.celebrationId > 0
+  const maxScore = Math.max(0, ...ranked.map((team) => team.coins))
+  const rowElements = useRef(new Map<string, HTMLElement>())
+  const previousPositions = useRef(new Map<string, DOMRect>())
+  const [isCelebrating, setIsCelebrating] = useState(false)
+
+  useEffect(() => {
+    if (state.celebrationId === 0) return
+    // A new external celebration token starts the three-second visual sequence.
+    // oxlint-disable-next-line react/set-state-in-effect
+    setIsCelebrating(true)
+    const timer = window.setTimeout(() => setIsCelebrating(false), UPDATE_DURATION + 250)
+    return () => window.clearTimeout(timer)
+  }, [state.celebrationId])
+
+  useLayoutEffect(() => {
+    const nextPositions = new Map<string, DOMRect>()
+    rowElements.current.forEach((element, id) => {
+      const next = element.getBoundingClientRect()
+      nextPositions.set(id, next)
+      const previous = previousPositions.current.get(id)
+      if (!previous || state.celebrationId === 0) return
+      const deltaY = previous.top - next.top
+      if (Math.abs(deltaY) < 1) return
+      element.getAnimations().forEach((animation) => animation.cancel())
+      element.animate(
+        [{ transform: `translateY(${deltaY}px)`, zIndex: 7 }, { transform: 'translateY(0)', zIndex: 7 }],
+        { duration: UPDATE_DURATION, easing: 'cubic-bezier(.16, .82, .18, 1)' },
+      )
+    })
+    previousPositions.current = nextPositions
+  }, [ranked, state.celebrationId])
+
   return (
-    <section className={`tv-board ${preview ? 'is-preview' : ''} ${isCelebrating ? 'is-celebrating' : ''}`} key={state.celebrationId}>
+    <section className={`tv-board ${preview ? 'is-preview' : ''} ${isCelebrating ? 'is-celebrating' : ''}`}>
       <div className="rive-layer">
         <RiveStage title={state.title} leaderName={leader?.name ?? 'READY'} leaderScore={leader?.coins ?? 0} round={state.round} celebrationId={state.celebrationId} energy={state.lastAward} />
       </div>
       <div className="score-grid" aria-label="Team rankings">
-        {ranked.map((team) => (
-          <article className={`score-row rank-${team.rank} ${team.rank === 1 ? 'is-leader' : ''}`} key={team.id}>
-            <span className="rank-badge">{team.rank}<small>{team.rank === 1 ? 'ST' : team.rank === 2 ? 'ND' : team.rank === 3 ? 'RD' : 'TH'}</small></span>
-            <span className="score-name">{team.name}</span><span className="coin-mark" aria-hidden="true">★</span><strong>{team.coins.toLocaleString()}</strong>
-          </article>
-        ))}
+        {ranked.map((team) => <AnimatedScoreRow key={team.id} team={team} maxScore={maxScore} celebrationId={state.celebrationId} rowRef={(element) => {
+          if (element) rowElements.current.set(team.id, element)
+          else rowElements.current.delete(team.id)
+        }} />)}
       </div>
-      {isCelebrating && <div className="impact-flash" aria-hidden="true" />}
+      {isCelebrating && <div className="spectacle-layer" key={state.celebrationId} aria-hidden="true">
+        <div className="impact-flash" />
+        <div className="energy-wave wave-one" /><div className="energy-wave wave-two" /><div className="energy-wave wave-three" />
+        {Array.from({ length: 28 }, (_, index) => <i className="burst-particle" key={index} style={{ '--particle': index } as CSSProperties} />)}
+      </div>}
     </section>
   )
 }
