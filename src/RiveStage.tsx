@@ -5,6 +5,7 @@ type Props = { title: string; leaderName: string; leaderScore: number; round: nu
 
 export function RiveStage({ title, leaderName, leaderScore, round, celebrationId, energy }: Props) {
   const displayedLeaderScore = useRef(leaderScore)
+  const observedCelebration = useRef(celebrationId)
   const { rive, RiveComponent } = useRive({
     src: '/rive/party-scoreboard.riv',
     stateMachine: 'Scoreboard State Machine',
@@ -35,7 +36,8 @@ export function RiveStage({ title, leaderName, leaderScore, round, celebrationId
     let frame = 0
     const tick = (now: number) => {
       const progress = Math.min(1, (now - startedAt) / 3000)
-      const value = Math.round(from + (leaderScore - from) * progress)
+      const eased = progress * progress * (3 - 2 * progress)
+      const value = Math.round(from + (leaderScore - from) * eased)
       displayedLeaderScore.current = value
       property.value = value
       if (progress < 1) frame = requestAnimationFrame(tick)
@@ -45,13 +47,20 @@ export function RiveStage({ title, leaderName, leaderScore, round, celebrationId
   }, [rive, leaderScore, celebrationId])
 
   useEffect(() => {
-    if (!rive?.viewModelInstance || celebrationId === 0) return
+    if (!rive?.viewModelInstance || celebrationId === observedCelebration.current) return
+    observedCelebration.current = celebrationId
     const property = rive.viewModelInstance.number('celebration')
     if (!property) return
-    property.value = 1
-    const fade = window.setTimeout(() => { property.value = 0.42 }, 2450)
-    const end = window.setTimeout(() => { property.value = 0 }, 3050)
-    return () => { window.clearTimeout(fade); window.clearTimeout(end) }
+    const startedAt = performance.now()
+    let frame = 0
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / 3000)
+      property.value = Math.pow(Math.sin(Math.PI * progress), 0.58)
+      if (progress < 1) frame = requestAnimationFrame(tick)
+      else property.value = 0
+    }
+    frame = requestAnimationFrame(tick)
+    return () => { cancelAnimationFrame(frame); property.value = 0 }
   }, [rive, celebrationId])
 
   return <RiveComponent aria-label="Animated Rive superstar arena" />

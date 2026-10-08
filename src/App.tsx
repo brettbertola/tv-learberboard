@@ -33,6 +33,7 @@ function useLiveScoreboard(): [ScoreboardState, Commit] {
 }
 
 const UPDATE_DURATION = 3000
+const TEAM_COLORS = ['#ff5f8f', '#58d6ff', '#ffd44d', '#8f70ff', '#55df9a', '#ff8d42', '#e96cff', '#45e2d1', '#ff6f5e', '#78d451', '#54a3ff', '#f4a4ff']
 
 function useAnimatedScore(target: number, celebrationId: number) {
   const [displayed, setDisplayed] = useState(target)
@@ -51,7 +52,8 @@ function useAnimatedScore(target: number, celebrationId: number) {
     let frame = 0
     const tick = (now: number) => {
       const progress = Math.min(1, (now - startedAt) / UPDATE_DURATION)
-      const next = Math.round(from + (target - from) * progress)
+      const eased = progress * progress * (3 - 2 * progress)
+      const next = Math.round(from + (target - from) * eased)
       currentRef.current = next
       setDisplayed(next)
       if (progress < 1) frame = requestAnimationFrame(tick)
@@ -63,20 +65,20 @@ function useAnimatedScore(target: number, celebrationId: number) {
   return displayed
 }
 
-function AnimatedScoreRow({ team, maxScore, celebrationId, rowRef }: {
+function AnimatedScoreRow({ team, maxScore, celebrationId, color, rowRef }: {
   team: ReturnType<typeof rankTeams>[number]
   maxScore: number
   celebrationId: number
+  color: string
   rowRef: (element: HTMLElement | null) => void
 }) {
   const displayedScore = useAnimatedScore(team.coins, celebrationId)
   const fill = maxScore > 0 ? Math.max(0, Math.min(100, (displayedScore / maxScore) * 100)) : 0
   return (
-    <article ref={rowRef} data-team-id={team.id} className={`score-row rank-${team.rank} ${team.rank === 1 ? 'is-leader' : ''}`}>
+    <article ref={rowRef} data-team-id={team.id} style={{ '--team-color': color } as CSSProperties} className={`score-row rank-${team.rank} ${team.rank === 1 ? 'is-leader' : ''}`}>
       <span className="score-fill" style={{ width: `${fill}%` }} />
       <span className="rank-badge">{team.rank}<small>{team.rank === 1 ? 'ST' : team.rank === 2 ? 'ND' : team.rank === 3 ? 'RD' : 'TH'}</small></span>
       <span className="score-name">{team.name}</span>
-      <span className="coin-mark" aria-hidden="true">★</span>
       <strong>{displayedScore.toLocaleString()}</strong>
     </article>
   )
@@ -88,15 +90,23 @@ function TVBoard({ state, preview = false }: { state: ScoreboardState; preview?:
   const maxScore = Math.max(0, ...ranked.map((team) => team.coins))
   const rowElements = useRef(new Map<string, HTMLElement>())
   const previousPositions = useRef(new Map<string, DOMRect>())
+  const observedCelebration = useRef(state.celebrationId)
   const [isCelebrating, setIsCelebrating] = useState(false)
+  const [showLeader, setShowLeader] = useState(false)
 
   useEffect(() => {
-    if (state.celebrationId === 0) return
+    if (state.celebrationId === observedCelebration.current) return
+    observedCelebration.current = state.celebrationId
     // A new external celebration token starts the three-second visual sequence.
     // oxlint-disable-next-line react/set-state-in-effect
     setIsCelebrating(true)
-    const timer = window.setTimeout(() => setIsCelebrating(false), UPDATE_DURATION + 250)
-    return () => window.clearTimeout(timer)
+    // Restart the post-animation leader reveal for each completed score update.
+    // oxlint-disable-next-line react/set-state-in-effect
+    setShowLeader(false)
+    const finish = window.setTimeout(() => setIsCelebrating(false), UPDATE_DURATION + 250)
+    const reveal = window.setTimeout(() => setShowLeader(true), UPDATE_DURATION + 100)
+    const hide = window.setTimeout(() => setShowLeader(false), UPDATE_DURATION + 4100)
+    return () => { window.clearTimeout(finish); window.clearTimeout(reveal); window.clearTimeout(hide) }
   }, [state.celebrationId])
 
   useLayoutEffect(() => {
@@ -111,7 +121,7 @@ function TVBoard({ state, preview = false }: { state: ScoreboardState; preview?:
       element.getAnimations().forEach((animation) => animation.cancel())
       element.animate(
         [{ transform: `translateY(${deltaY}px)`, zIndex: 7 }, { transform: 'translateY(0)', zIndex: 7 }],
-        { duration: UPDATE_DURATION, easing: 'cubic-bezier(.16, .82, .18, 1)' },
+        { duration: UPDATE_DURATION, easing: 'cubic-bezier(.65, 0, .35, 1)' },
       )
     })
     previousPositions.current = nextPositions
@@ -123,11 +133,14 @@ function TVBoard({ state, preview = false }: { state: ScoreboardState; preview?:
         <RiveStage title={state.title} leaderName={leader?.name ?? 'READY'} leaderScore={leader?.coins ?? 0} round={state.round} celebrationId={state.celebrationId} energy={state.lastAward} />
       </div>
       <div className="score-grid" aria-label="Team rankings">
-        {ranked.map((team) => <AnimatedScoreRow key={team.id} team={team} maxScore={maxScore} celebrationId={state.celebrationId} rowRef={(element) => {
+        {ranked.map((team) => <AnimatedScoreRow key={team.id} team={team} maxScore={maxScore} celebrationId={state.celebrationId} color={TEAM_COLORS[Math.max(0, state.teams.findIndex((candidate) => candidate.id === team.id)) % TEAM_COLORS.length]} rowRef={(element) => {
           if (element) rowElements.current.set(team.id, element)
           else rowElements.current.delete(team.id)
         }} />)}
       </div>
+      {showLeader && leader && <div className="leader-reveal" key={`leader-${state.celebrationId}`} style={{ '--team-color': TEAM_COLORS[Math.max(0, state.teams.findIndex((candidate) => candidate.id === leader.id)) % TEAM_COLORS.length] } as CSSProperties}>
+        <span>Leading the party</span><b>{leader.name}</b><strong>{leader.coins.toLocaleString()} coins</strong>
+      </div>}
       {isCelebrating && <div className="spectacle-layer" key={state.celebrationId} aria-hidden="true">
         <div className="impact-flash" />
         <div className="energy-wave wave-one" /><div className="energy-wave wave-two" /><div className="energy-wave wave-three" />
